@@ -33,8 +33,22 @@ import subprocess
 import datetime
 import json
 import re
+import shutil
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+
+try:
+    from tkinterdnd2 import TkinterDnD, DND_FILES
+    HAS_DND = True
+except ImportError:
+    HAS_DND = False
+
+if HAS_DND:
+    class BaseApp(TkinterDnD.Tk):
+        pass
+else:
+    class BaseApp(tk.Tk):
+        pass
 
 # ----------------------------------------------------------------------
 # Cấu hình loại file
@@ -256,7 +270,7 @@ class Printer:
 # ----------------------------------------------------------------------
 # Giao diện chính
 # ----------------------------------------------------------------------
-class MassPrintApp(tk.Tk):
+class MassPrintApp(BaseApp):
     CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
     def __init__(self):
@@ -295,6 +309,10 @@ class MassPrintApp(tk.Tk):
         )
 
         self._build_ui()
+
+        if HAS_DND:
+            self.drop_target_register(DND_FILES)
+            self.dnd_bind('<<Drop>>', self._on_drop)
 
         # Tự động quét lại thư mục gần nhất
         last_folder = self.config.get("last_folder", "")
@@ -402,6 +420,11 @@ class MassPrintApp(tk.Tk):
         )
         self.btn_print.pack(side="right")
 
+        self.btn_copy_move = ttk.Button(
+            frm_actions, text="SAO CHÉP / DI CHUYỂN", command=self.start_copy_move
+        )
+        self.btn_copy_move.pack(side="right", padx=6)
+
         self.btn_cancel = ttk.Button(
             frm_actions, text="Dừng in", command=self.cancel_print, state="disabled"
         )
@@ -432,6 +455,17 @@ class MassPrintApp(tk.Tk):
         except Exception:
             pass  # không để lỗi ghi log làm gián đoạn việc in
 
+    def _on_drop(self, event):
+        path = event.data
+        if path.startswith('{') and path.endswith('}'):
+            path = path[1:-1]
+        if os.path.isdir(path):
+            self.folder_path.set(path)
+            self._save_config()
+            self._start_folder_scan(path)
+        else:
+            messagebox.showerror("Lỗi", "Chỉ chấp nhận kéo thả thư mục.")
+
     def choose_folder(self):
         path = filedialog.askdirectory()
         if path:
@@ -447,6 +481,8 @@ class MassPrintApp(tk.Tk):
         self.checked_files.clear()
 
         self.btn_print.config(state="disabled")
+        if hasattr(self, 'btn_copy_move'):
+            self.btn_copy_move.config(state="disabled")
 
         threading.Thread(target=self._scan_worker, args=(path,), daemon=True).start()
 
@@ -477,6 +513,8 @@ class MassPrintApp(tk.Tk):
         self.all_files = scanned_files
         self.log(f"Đã quét xong {len(self.all_files)} file (PDF/DOC/XLS) trong thư mục.")
         self.btn_print.config(state="normal")
+        if hasattr(self, 'btn_copy_move'):
+            self.btn_copy_move.config(state="normal")
         self.apply_filter()
 
     def on_search_key_release(self, event):
@@ -585,6 +623,181 @@ class MassPrintApp(tk.Tk):
             self.tree.item(item_id, values=vals)
         self.checked_files.clear()
         self.update_count()
+
+    def start_copy_move(self):
+        if not self.checked_files:
+            messagebox.showwarning("Chưa chọn file", "Vui lòng chọn ít nhất một file.")
+            return
+
+        dest_dir = filedialog.askdirectory(title="Chọn thư mục đích")
+        if not dest_dir:
+            return
+
+        ans = messagebox.askyesnocancel("Xác nhận", "Bạn có muốn xóa file gốc sau khi copy không?\\n\\nYes = Di chuyển (Cut)\\nNo = Chỉ Copy\\nCancel = Hủy")
+        if ans is None:
+            return
+
+        is_move = ans
+
+        files_to_copy = sorted(list(self.checked_files), key=lambda x: natural_sort_key(os.path.basename(x)))
+
+        self.cancel_requested.clear()
+        self.progress.config(maximum=len(files_to_copy), value=0)
+        self.progress_label.config(text=f"0 / {len(files_to_copy)}")
+        self.btn_print.config(state="disabled")
+        self.btn_copy_move.config(state="disabled")
+        self.btn_cancel.config(state="normal")
+
+        threading.Thread(
+            target=self._copy_worker, args=(files_to_copy, dest_dir, is_move), daemon=True
+        ).start()
+
+    def _get_company_code(self, filename):
+        match = re.search(r'([a-zA-Z]+\\d+)', filename)
+        if match:
+            return match.group(1).upper()
+        return "Khác"
+
+    def _ask_conflict_action(self, filename):
+        result_container = []
+        apply_to_all_container = [False]
+        event = threading.Event()
+
+        def _show_dialog():
+            dlg = tk.Toplevel(self)
+            dlg.title("File đã tồn tại")
+            dlg.geometry("300x180")
+            dlg.resizable(False, False)
+            dlg.grab_set()
+
+            ttk.Label(dlg, text=f"File {filename} đã tồn tại.\\nBạn muốn xử lý thế nào?").pack(pady=10)
+
+            def set_res(act):
+                result_container.append(act)
+                apply_to_all_container[0] = chk_var.get()
+                dlg.destroy()
+                event.set()
+
+            chk_var = tk.BooleanVar(value=False)
+            ttk.Checkbutton(dlg, text="Áp dụng cho tất cả", variable=chk_var).pack(pady=5)
+
+            btn_frame = ttk.Frame(dlg)
+            btn_frame.pack(pady=10)
+
+            ttk.Button(btn_frame, text="Đổi tên tự động", command=lambda: set_res("rename")).pack(side="left", padx=5)
+            ttk.Button(btn_frame, text="Ghi đè", command=lambda: set_res("overwrite")).pack(side="left", padx=5)
+            ttk.Button(btn_frame, text="Bỏ qua", command=lambda: set_res("skip")).pack(side="left", padx=5)
+
+            dlg.protocol("WM_DELETE_WINDOW", lambda: set_res("skip"))
+
+        self.after(0, _show_dialog)
+        event.wait()
+        return result_container[0], apply_to_all_container[0]
+
+    def _get_auto_renamed_path(self, target_dir, filename):
+        base, ext = os.path.splitext(filename)
+        counter = 1
+        while True:
+            new_name = f"{base} ({counter}){ext}"
+            new_path = os.path.join(target_dir, new_name)
+            if not os.path.exists(new_path):
+                return new_path
+            counter += 1
+
+    def _copy_worker(self, files, dest_dir, is_move):
+        total = len(files)
+        action_name = "Di chuyển" if is_move else "Sao chép"
+        self.log(f"--- Bắt đầu {action_name.lower()} {total} file ---")
+
+        success_copy = 0
+        success_move = 0
+        skipped = 0
+        failed = 0
+        processed = 0
+        cancelled = False
+
+        global_conflict_action = None
+
+        for path in files:
+            if self.cancel_requested.is_set():
+                cancelled = True
+                self.log(f"--- Đã dừng theo yêu cầu. Đã {action_name.lower()} {processed}/{total} file trước khi dừng. ---")
+                break
+
+            filename = os.path.basename(path)
+            company_code = self._get_company_code(filename)
+            target_dir = os.path.join(dest_dir, company_code)
+            os.makedirs(target_dir, exist_ok=True)
+            
+            dest_path = os.path.join(target_dir, filename)
+
+            try:
+                if os.path.exists(dest_path):
+                    if global_conflict_action:
+                        action = global_conflict_action
+                    else:
+                        action, apply_all = self._ask_conflict_action(filename)
+                        if apply_all:
+                            global_conflict_action = action
+                    
+                    if action == "skip":
+                        skipped += 1
+                        self.log(f"[SKIPPED]\n{filename}")
+                        processed += 1
+                        self.after(0, self._update_progress, processed, total)
+                        continue
+                    elif action == "rename":
+                        dest_path = self._get_auto_renamed_path(target_dir, filename)
+                    elif action == "overwrite":
+                        pass
+
+                if is_move:
+                    if os.path.exists(dest_path):
+                        os.replace(path, dest_path)
+                    else:
+                        shutil.move(path, dest_path)
+                    success_move += 1
+                    self.log(f"[MOVE]\n{filename}")
+                else:
+                    if os.path.exists(dest_path):
+                        os.remove(dest_path)
+                    shutil.copy2(path, dest_path)
+                    success_copy += 1
+                    self.log(f"[COPY]\n{filename}")
+
+            except Exception as e:
+                failed += 1
+                self.log(f"[FAILED]\n{filename} - {str(e)}")
+
+            processed += 1
+            self.after(0, self._update_progress, processed, total)
+
+        if not cancelled:
+            self.log(f"--- Hoàn tất {action_name.lower()} ---")
+
+        self.after(0, self._on_copy_finished, success_copy, success_move, skipped, failed, is_move)
+
+    def _on_copy_finished(self, success_copy, success_move, skipped, failed, is_move):
+        self.btn_print.config(state="normal")
+        self.btn_copy_move.config(state="normal")
+        self.btn_cancel.config(state="disabled")
+
+        summary = (
+            "====================\n"
+            "Copy thành công:\n"
+            f"{success_copy}\n\n"
+            "Move thành công:\n"
+            f"{success_move}\n\n"
+            "Bỏ qua:\n"
+            f"{skipped}\n\n"
+            "Lỗi:\n"
+            f"{failed}\n"
+            "===================="
+        )
+        messagebox.showinfo("Tổng kết", summary)
+        
+        if is_move:
+            self._start_folder_scan(self.folder_path.get())
 
     def update_count(self):
         total = len(self.tree.get_children())
