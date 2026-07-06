@@ -140,12 +140,17 @@ class Printer:
                 word.ActivePrinter = self.printer_name
             except Exception as e:
                 self.log(f"[CẢNH BÁO] Không đặt được máy in cho Word: {e}")
-        doc = word.Documents.Open(filepath, ReadOnly=True)
+        doc = None
         try:
+            doc = word.Documents.Open(filepath, ReadOnly=True)
             doc.PrintOut()
             time.sleep(1)  # chờ spool trước khi đóng
         finally:
-            doc.Close(False)
+            if doc:
+                try:
+                    doc.Close(False)
+                except Exception:
+                    pass
 
     def print_excel(self, filepath):
         excel = self._get_excel()
@@ -154,12 +159,17 @@ class Printer:
                 excel.ActivePrinter = self.printer_name
             except Exception as e:
                 self.log(f"[CẢNH BÁO] Không đặt được máy in cho Excel: {e}")
-        wb = excel.Workbooks.Open(filepath, ReadOnly=True)
+        wb = None
         try:
+            wb = excel.Workbooks.Open(filepath, ReadOnly=True)
             wb.PrintOut()
             time.sleep(1)
         finally:
-            wb.Close(False)
+            if wb:
+                try:
+                    wb.Close(False)
+                except Exception:
+                    pass
 
     def print_pdf(self, filepath):
         if self.sumatra_path:
@@ -167,7 +177,11 @@ class Printer:
                 cmd = [self.sumatra_path, "-print-to", self.printer_name, "-silent", filepath]
             else:
                 cmd = [self.sumatra_path, "-print-to-default", "-silent", filepath]
-            subprocess.run(cmd, timeout=60)
+            try:
+                subprocess.run(cmd, timeout=60)
+            except subprocess.TimeoutExpired:
+                self.log(f"[CẢNH BÁO] SumatraPDF quá thời gian phản hồi.")
+                raise Exception("Timeout in SumatraPDF")
         else:
             # Không có SumatraPDF: dùng verb "print" mặc định của Windows shell.
             # Verb này luôn in vào máy in MẶC ĐỊNH của hệ thống, nên nếu người
@@ -205,7 +219,8 @@ class Printer:
                 self._word_app.Quit()
         except Exception:
             pass
-        self._word_app = None
+        finally:
+            self._word_app = None
 
     def _reset_excel(self):
         """Ép tạo lại instance Excel mới, tương tự _reset_word."""
@@ -214,7 +229,8 @@ class Printer:
                 self._excel_app.Quit()
         except Exception:
             pass
-        self._excel_app = None
+        finally:
+            self._excel_app = None
 
     def print_file(self, filepath):
         if not os.path.exists(filepath):
@@ -259,11 +275,17 @@ class Printer:
                 self._word_app.Quit()
         except Exception:
             pass
+        finally:
+            self._word_app = None
+
         try:
             if self._excel_app is not None:
                 self._excel_app.Quit()
         except Exception:
             pass
+        finally:
+            self._excel_app = None
+
         self.restore_default_printer()
 
 
@@ -322,12 +344,15 @@ class MassPrintApp(BaseApp):
             self._start_folder_scan(last_folder)
 
     def _load_config(self):
-        try:
-            if os.path.exists(self.CONFIG_FILE):
+        if os.path.exists(self.CONFIG_FILE):
+            try:
                 with open(self.CONFIG_FILE, "r", encoding="utf-8") as f:
                     return json.load(f)
-        except Exception:
-            pass
+            except Exception:
+                try:
+                    os.rename(self.CONFIG_FILE, self.CONFIG_FILE + ".bak")
+                except Exception:
+                    pass
         return {}
 
     def _save_config(self):
@@ -447,15 +472,20 @@ class MassPrintApp(BaseApp):
     # ---------------- Logic ----------------
     def log(self, msg):
         timestamped = f"[{time.strftime('%H:%M:%S')}]\n{msg}"
-        self.log_box.configure(state="normal")
-        self.log_box.insert("end", timestamped + "\n\n")
-        self.log_box.see("end")
-        self.log_box.configure(state="disabled")
+        def _update_ui():
+            try:
+                self.log_box.configure(state="normal")
+                self.log_box.insert("end", timestamped + "\n\n")
+                self.log_box.see("end")
+                self.log_box.configure(state="disabled")
+            except Exception:
+                pass
+        self.after(0, _update_ui)
         try:
             with open(self.log_file_path, "a", encoding="utf-8") as f:
                 f.write(timestamped + "\n\n")
         except Exception:
-            pass  # không để lỗi ghi log làm gián đoạn việc in
+            pass
 
     def _on_drop(self, event):
         path = event.data
@@ -800,11 +830,7 @@ class MassPrintApp(BaseApp):
         if is_move:
             self._start_folder_scan(self.folder_path.get())
 
-        if messagebox.askyesno("Đã hoàn thành", "Đã hoàn thành.\nBạn có muốn mở thư mục đích không?"):
-            try:
-                os.startfile(dest_dir)
-            except Exception:
-                pass
+
 
         if messagebox.askyesno("Đã hoàn thành", "Đã hoàn thành.\nBạn có muốn mở thư mục đích không?"):
             try:
