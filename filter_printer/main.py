@@ -136,7 +136,7 @@ class MassPrintApp(BaseApp):
         self.tree.column("checked", width=40, anchor="center")
         self.tree.column("name", width=250)
         self.tree.column("type", width=60, anchor="center")
-        self.tree.column("size", width=80, anchor="right")
+        self.tree.column("size", width=80, anchor="e")
         self.tree.column("modified", width=140, anchor="center")
         self.tree.column("path", width=250)
         self.tree.pack(fill="both", expand=True, padx=8, pady=6)
