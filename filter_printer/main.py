@@ -283,7 +283,8 @@ class MassPrintApp(BaseApp):
         self.active_types = {k: tk.BooleanVar(value=True) for k in FILE_TYPE_GROUPS}
         self.all_files = []          # toàn bộ file trong folder (quét 1 lần)
         self.checked_files = set()   # lưu filepath của các file được tick chọn
-        self.cancel_requested = threading.Event()  # cờ báo hiệu "Dừng in"
+        self.print_cancel_requested = threading.Event()
+        self.copy_cancel_requested = threading.Event()
         self.sort_state = {}         # ghi nhớ chiều sắp xếp của từng cột
 
         self._filter_timer = None    # Timer cho Debounce ô tìm kiếm
@@ -333,7 +334,8 @@ class MassPrintApp(BaseApp):
         try:
             config = {
                 "last_folder": self.folder_path.get(),
-                "last_printer": self.printer_choice.get()
+                "last_printer": self.printer_choice.get(),
+                "last_destination_folder": self.config.get("last_destination_folder", "")
             }
             with open(self.CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(config, f, ensure_ascii=False, indent=4)
@@ -641,12 +643,12 @@ class MassPrintApp(BaseApp):
 
         files_to_copy = sorted(list(self.checked_files), key=lambda x: natural_sort_key(os.path.basename(x)))
 
-        self.cancel_requested.clear()
+        self.print_cancel_requested.clear()
         self.progress.config(maximum=len(files_to_copy), value=0)
         self.progress_label.config(text=f"0 / {len(files_to_copy)}")
         self.btn_print.config(state="disabled")
         self.btn_copy_move.config(state="disabled")
-        self.btn_cancel.config(state="normal")
+        self.btn_cancel.config(command=self.cancel_print, state="normal")
 
         threading.Thread(
             target=self._copy_worker, args=(files_to_copy, dest_dir, is_move), daemon=True
@@ -719,7 +721,7 @@ class MassPrintApp(BaseApp):
         global_conflict_action = None
 
         for path in files:
-            if self.cancel_requested.is_set():
+            if self.copy_cancel_requested.is_set():
                 cancelled = True
                 self.log(f"--- Đã dừng theo yêu cầu. Đã {action_name.lower()} {processed}/{total} file trước khi dừng. ---")
                 break
@@ -727,11 +729,10 @@ class MassPrintApp(BaseApp):
             filename = os.path.basename(path)
             company_code = self._get_company_code(filename)
             target_dir = os.path.join(dest_dir, company_code)
-            os.makedirs(target_dir, exist_ok=True)
-            
             dest_path = os.path.join(target_dir, filename)
 
             try:
+                os.makedirs(target_dir, exist_ok=True)
                 if os.path.exists(dest_path):
                     if global_conflict_action:
                         action = global_conflict_action
@@ -757,17 +758,17 @@ class MassPrintApp(BaseApp):
                     else:
                         shutil.move(path, dest_path)
                     success_move += 1
-                    self.log(f"[MOVE]\n{filename}")
+                    self.log(f"[MOVE]\n{filename}\nFROM: {path}\nTO: {dest_path}")
                 else:
                     if os.path.exists(dest_path):
                         os.remove(dest_path)
                     shutil.copy2(path, dest_path)
                     success_copy += 1
-                    self.log(f"[COPY]\n{filename}")
+                    self.log(f"[COPY]\n{filename}\nFROM: {path}\nTO: {dest_path}")
 
             except Exception as e:
                 failed += 1
-                self.log(f"[FAILED]\n{filename} - {str(e)}")
+                self.log(f"[FAILED]\nFile: {filename}\nFROM: {path}\nTO: {dest_path}\nLỗi: {str(e)}")
 
             processed += 1
             self.after(0, self._update_progress, processed, total)
@@ -775,9 +776,9 @@ class MassPrintApp(BaseApp):
         if not cancelled:
             self.log(f"--- Hoàn tất {action_name.lower()} ---")
 
-        self.after(0, self._on_copy_finished, success_copy, success_move, skipped, failed, is_move)
+        self.after(0, self._on_copy_finished, success_copy, success_move, skipped, failed, is_move, dest_dir)
 
-    def _on_copy_finished(self, success_copy, success_move, skipped, failed, is_move):
+    def _on_copy_finished(self, success_copy, success_move, skipped, failed, is_move, dest_dir):
         self.btn_print.config(state="normal")
         self.btn_copy_move.config(state="normal")
         self.btn_cancel.config(state="disabled")
@@ -798,6 +799,18 @@ class MassPrintApp(BaseApp):
         
         if is_move:
             self._start_folder_scan(self.folder_path.get())
+
+        if messagebox.askyesno("Đã hoàn thành", "Đã hoàn thành.\nBạn có muốn mở thư mục đích không?"):
+            try:
+                os.startfile(dest_dir)
+            except Exception:
+                pass
+
+        if messagebox.askyesno("Đã hoàn thành", "Đã hoàn thành.\nBạn có muốn mở thư mục đích không?"):
+            try:
+                os.startfile(dest_dir)
+            except Exception:
+                pass
 
     def update_count(self):
         total = len(self.tree.get_children())
@@ -826,7 +839,7 @@ class MassPrintApp(BaseApp):
 
         self._save_config()
 
-        self.cancel_requested.clear()
+        self.print_cancel_requested.clear()
         self.progress.config(maximum=len(files_to_print), value=0)
         self.progress_label.config(text=f"0 / {len(files_to_print)}")
         self.btn_print.config(state="disabled")
@@ -841,7 +854,7 @@ class MassPrintApp(BaseApp):
         ).start()
 
     def cancel_print(self):
-        self.cancel_requested.set()
+        self.print_cancel_requested.set()
         self.log("--- Đã nhận yêu cầu DỪNG. Sẽ dừng sau khi in xong file hiện tại... ---")
         self.btn_cancel.config(state="disabled")
 
@@ -856,7 +869,7 @@ class MassPrintApp(BaseApp):
         cancelled = False
 
         for path in files:
-            if self.cancel_requested.is_set():
+            if self.print_cancel_requested.is_set():
                 cancelled = True
                 self.log(f"--- Đã dừng theo yêu cầu. Đã in {processed}/{total} file trước khi dừng. ---")
                 break
