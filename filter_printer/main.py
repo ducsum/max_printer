@@ -61,6 +61,7 @@ class MassPrintApp(BaseApp):
             self.active_types[k] = tk.BooleanVar(value=last_types.get(k, True))
 
         self.all_files = []
+        self.file_by_path = {}
         self.checked_files = set()
         
         self.print_cancel_requested = threading.Event()
@@ -243,24 +244,43 @@ class MassPrintApp(BaseApp):
         self.btn_print.config(state="disabled")
         self.btn_copy_move.config(state="disabled")
         
+        self.scan_cancel_requested = threading.Event()
+        self.btn_cancel.config(command=self.cancel_scan, state="normal", text="Dừng quét")
+        
         self.status_var.set("Scanning...")
         self.tree.delete(*self.tree.get_children())
         self.all_files = []
+        self.file_by_path = {}
         self.checked_files.clear()
         self.update_count()
         
         scanner = FolderScanner(
             path, 
-            progress_callback=lambda c: self.after(0, lambda: self.status_var.set(f"Scanning... {c} files found")),
-            finished_callback=lambda files, size: self.after(0, self._on_scan_finished, files)
+            progress_callback=lambda f, fd, e, s: self.after(0, self._update_scan_progress, f, fd, e, s),
+            finished_callback=lambda files, size: self.after(0, self._on_scan_finished, files),
+            cancel_event=self.scan_cancel_requested
         )
         threading.Thread(target=scanner.scan, daemon=True).start()
 
+    def cancel_scan(self):
+        if hasattr(self, 'scan_cancel_requested'):
+            self.scan_cancel_requested.set()
+        self.btn_cancel.config(state="disabled")
+
+    def _update_scan_progress(self, files, folders, elapsed, speed):
+        self.status_var.set(f"Scanning... Files: {files} | Folders: {folders} | Elapsed: {format_time(elapsed)} | Speed: {speed:.1f} f/s")
+
     def _on_scan_finished(self, scanned_files):
         self.all_files = scanned_files
-        self.status_var.set("Ready")
-        self.logger.log(f"Đã quét xong {len(self.all_files)} file.", after_callback=self.after)
+        self.file_by_path = {f["path"]: f for f in scanned_files}
         
+        self.status_var.set("Ready")
+        msg = f"Đã quét xong {len(self.all_files)} file."
+        if hasattr(self, 'scan_cancel_requested') and self.scan_cancel_requested.is_set():
+            msg += " (Đã dừng)"
+        self.logger.log(msg, after_callback=self.after)
+        
+        self.btn_cancel.config(text="Dừng in", state="disabled")
         self._lock_ui(False)
         self.btn_print.config(state="normal")
         self.btn_copy_move.config(state="normal")
@@ -289,7 +309,7 @@ class MassPrintApp(BaseApp):
 
         matched = [
             f for f in self.all_files
-            if f["ext"] in allowed_exts and name_matches(f["name"].lower())
+            if f["ext"] in allowed_exts and name_matches(f["name_lower"])
         ]
 
         type_label = {".pdf": "PDF", ".doc": "DOC", ".docx": "DOC", ".xls": "XLS", ".xlsx": "XLS"}
@@ -315,23 +335,33 @@ class MassPrintApp(BaseApp):
             self.cfg.set("sort_column", col)
             self.cfg.set("sort_reverse", reverse)
 
-        items = [(self.tree.set(k, col), k) for k in self.tree.get_children("")]
+        items = [(self.tree.set(k, "path"), k) for k in self.tree.get_children("")]
+
+        keywords = [k.strip() for k in self.keyword.get().strip().lower().split(",") if k.strip()]
+        def get_search_score(path):
+            if not keywords:
+                return 3
+            f = self.file_by_path.get(path)
+            if not f:
+                return 3
+            name_lower = f["name_lower"]
+            best = 3
+            for k in keywords:
+                if k == name_lower: best = min(best, 0)
+                elif name_lower.startswith(k): best = min(best, 1)
+                elif k in name_lower: best = min(best, 2)
+            return best
 
         if col == "name":
-            items.sort(key=lambda t: natural_sort_key(t[0]), reverse=reverse)
+            items.sort(key=lambda t: (get_search_score(t[0]), natural_sort_key(self.file_by_path.get(t[0], {}).get("name", ""))), reverse=reverse)
         elif col == "size":
-            # parse size string back to bytes for sorting - a bit hacky but works
-            def parse_size(s):
-                try:
-                    val, unit = s.split()
-                    val = float(val)
-                    mult = {'B': 1, 'KB': 1024, 'MB': 1024**2, 'GB': 1024**3}.get(unit, 1)
-                    return val * mult
-                except:
-                    return 0
-            items.sort(key=lambda t: parse_size(t[0]), reverse=reverse)
+            items.sort(key=lambda t: (get_search_score(t[0]), self.file_by_path.get(t[0], {}).get("size", 0)), reverse=reverse)
+        elif col == "modified":
+            items.sort(key=lambda t: (get_search_score(t[0]), self.file_by_path.get(t[0], {}).get("mtime", "")), reverse=reverse)
+        elif col == "type":
+            items.sort(key=lambda t: (get_search_score(t[0]), self.file_by_path.get(t[0], {}).get("ext", "")), reverse=reverse)
         else:
-            items.sort(key=lambda t: str(t[0]).lower(), reverse=reverse)
+            items.sort(key=lambda t: (get_search_score(t[0]), t[0]), reverse=reverse)
 
         for index, (_, k) in enumerate(items):
             self.tree.move(k, "", index)
@@ -420,10 +450,7 @@ class MassPrintApp(BaseApp):
         
     def update_count(self):
         total_items = len(self.tree.get_children())
-        total_selected_size = 0
-        for f in self.all_files:
-            if f["path"] in self.checked_files:
-                total_selected_size += f.get("size", 0)
+        total_selected_size = sum(self.file_by_path.get(p, {}).get("size", 0) for p in self.checked_files)
                 
         self.count_label.config(
             text=f"Đã lọc: {total_items} | Đã chọn: {len(self.checked_files)} ({format_size(total_selected_size)})"
