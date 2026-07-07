@@ -439,21 +439,35 @@ class MassPrintApp(BaseApp):
         self.tree.item(item_id, values=vals)
         self.update_count()
 
-    def select_all(self):
-        for item_id in self.tree.get_children():
+    def _batch_update_checkbox(self, children, symbol, start_idx):
+        chunk_size = 1000
+        end_idx = min(start_idx + chunk_size, len(children))
+        for i in range(start_idx, end_idx):
+            item_id = children[i]
             vals = list(self.tree.item(item_id, "values"))
-            vals[0] = "☑"
+            vals[0] = symbol
             self.tree.item(item_id, values=vals)
-            self.checked_files.add(vals[6])
+            
+        if end_idx < len(children):
+            self.after(10, self._batch_update_checkbox, children, symbol, end_idx)
+
+    def select_all(self):
+        children = self.tree.get_children()
+        # Update underlying data fast
+        for item_id in children:
+            self.checked_files.add(self.tree.item(item_id, "values")[6])
         self.update_count()
+        # Non-blocking batch update for UI
+        self._batch_update_checkbox(children, "☑", 0)
 
     def deselect_all(self):
-        for item_id in self.tree.get_children():
-            vals = list(self.tree.item(item_id, "values"))
-            vals[0] = "☐"
-            self.tree.item(item_id, values=vals)
-        self.checked_files.clear()
+        children = self.tree.get_children()
+        # Update underlying data fast
+        for item_id in children:
+            self.checked_files.discard(self.tree.item(item_id, "values")[6])
         self.update_count()
+        # Non-blocking batch update for UI
+        self._batch_update_checkbox(children, "☐", 0)
         
     def update_count(self):
         total_items = len(self.tree.get_children())

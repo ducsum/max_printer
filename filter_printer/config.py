@@ -1,6 +1,7 @@
 import os
 import json
 import shutil
+import threading
 from typing import Any, Dict
 import logging
 
@@ -12,6 +13,7 @@ class AppConfig:
     def __init__(self, config_file: str):
         self.config_file = config_file
         self.data: Dict[str, Any] = self._load()
+        self._save_timer = None
 
     def _load(self) -> Dict[str, Any]:
         data = DEFAULT_CONFIG.copy()
@@ -47,4 +49,7 @@ class AppConfig:
 
     def set(self, key: str, value: Any):
         self.data[key] = value
-        self.save()
+        if self._save_timer:
+            self._save_timer.cancel()
+        self._save_timer = threading.Timer(1.0, self.save)
+        self._save_timer.start()
