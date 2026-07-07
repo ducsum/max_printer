@@ -146,8 +146,6 @@ class MassPrintApp(BaseApp):
         self.tree.column("path", width=250)
         self.tree.pack(fill="both", expand=True, padx=8, pady=6)
         
-        self.tree.tag_configure('highlight', background='#ffff99')
-        
         self.tree.bind("<Button-1>", self.on_row_click)
         self.tree.bind("<Double-1>", self.on_row_double_click)
         self.tree.bind("<Button-3>", self.show_context_menu)
@@ -297,12 +295,10 @@ class MassPrintApp(BaseApp):
         type_label = {".pdf": "PDF", ".doc": "DOC", ".docx": "DOC", ".xls": "XLS", ".xlsx": "XLS"}
         for f in matched:
             check_mark = "☑" if f["path"] in self.checked_files else "☐"
-            tags = ('highlight',) if keywords and any(k in f["name"].lower() for k in keywords) else ()
             self.tree.insert(
                 "", "end",
                 values=(check_mark, "", f["name"], type_label.get(f["ext"], f["ext"]), 
-                        format_size(f["size"]), f["mtime"], f["path"]),
-                tags=tags
+                        format_size(f["size"]), f["mtime"], f["path"])
             )
         
         self.sort_by_column(self.sort_column, self.sort_reverse)
