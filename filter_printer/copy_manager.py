@@ -2,7 +2,7 @@ import os
 import shutil
 import time
 import hashlib
-from utils import get_company_code, get_long_path, is_file_locked
+from utils import get_company_code, get_long_path
 from constants import COPY_RETRY_COUNT, COPY_RETRY_DELAY, HASH_LIMIT_BYTES
 
 class CopyManager:
@@ -22,7 +22,7 @@ class CopyManager:
     def _calculate_sha256(self, filepath: str) -> str:
         sha256_hash = hashlib.sha256()
         with open(filepath, "rb") as f:
-            for byte_block in iter(lambda: f.read(4096), b""):
+            for byte_block in iter(lambda: f.read(1048576), b""):
                 sha256_hash.update(byte_block)
         return sha256_hash.hexdigest()
 
@@ -40,6 +40,7 @@ class CopyManager:
         cancelled = False
         
         global_conflict_action = None
+        last_ui_update = time.time()
 
         for path in files:
             if self.app.copy_cancel_requested.is_set():
@@ -61,7 +62,10 @@ class CopyManager:
                 skipped += 1
                 self.app.logger.log_action("SKIP", filename, long_path, dest_path, "SKIPPED_SAME_PATH", after_callback=self.app.after)
                 processed += 1
-                self.app.after(0, self.app._update_progress, processed, total)
+                current_time = time.time()
+                if current_time - last_ui_update >= 0.1:
+                    self.app.after(0, self.app._update_progress, processed, total)
+                    last_ui_update = current_time
                 continue
 
             try:
@@ -79,7 +83,10 @@ class CopyManager:
                         skipped += 1
                         self.app.logger.log_action("SKIP", filename, long_path, dest_path, "SKIPPED", after_callback=self.app.after)
                         processed += 1
-                        self.app.after(0, self.app._update_progress, processed, total)
+                        current_time = time.time()
+                        if current_time - last_ui_update >= 0.1:
+                            self.app.after(0, self.app._update_progress, processed, total)
+                            last_ui_update = current_time
                         continue
                     elif action == "rename":
                         dest_path = self._get_auto_renamed_path(target_dir, filename)
@@ -91,11 +98,6 @@ class CopyManager:
                 last_error = None
                 for attempt in range(COPY_RETRY_COUNT):
                     try:
-                        if is_file_locked(long_path):
-                            raise PermissionError(f"File nguồn đang bị khóa: {long_path}")
-                        if os.path.exists(dest_path) and is_file_locked(dest_path):
-                            raise PermissionError(f"File đích đang bị khóa: {dest_path}")
-
                         if is_move:
                             if os.path.exists(dest_path):
                                 os.replace(long_path, dest_path)
@@ -142,7 +144,13 @@ class CopyManager:
                 self.app.logger.log_action("ERROR", filename, long_path, dest_path, "FAILED", duration, error=str(e), after_callback=self.app.after)
 
             processed += 1
-            self.app.after(0, self.app._update_progress, processed, total)
+            current_time = time.time()
+            if current_time - last_ui_update >= 0.1:
+                self.app.after(0, self.app._update_progress, processed, total)
+                last_ui_update = current_time
+
+        # Bắt buộc gọi update lần cuối để đảm bảo thanh progress đầy
+        self.app.after(0, self.app._update_progress, processed, total)
 
         if not cancelled:
             self.app.logger.log(f"--- Hoàn tất {action_name.lower()} ---", after_callback=self.app.after)

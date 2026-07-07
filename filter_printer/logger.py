@@ -25,13 +25,23 @@ class AppLogger:
         file_handler.setFormatter(file_formatter)
         self._logger.addHandler(file_handler)
         
-        # Initialize CSV header
+        # Initialize CSV handle
+        self._csv_file = None
+        self._csv_writer = None
         try:
-            with open(self.csv_path, 'w', newline='', encoding='utf-8-sig') as f:
-                writer = csv.writer(f)
-                writer.writerow(["Timestamp", "Action", "Filename", "Source", "Destination", "Status", "Duration", "Error"])
+            self._csv_file = open(self.csv_path, 'w', newline='', encoding='utf-8-sig')
+            self._csv_writer = csv.writer(self._csv_file)
+            self._csv_writer.writerow(["Timestamp", "Action", "Filename", "Source", "Destination", "Status", "Duration", "Error"])
+            self._csv_file.flush()
         except Exception as e:
             self._logger.error(f"Failed to create CSV log file: {e}")
+
+    def __del__(self):
+        if hasattr(self, '_csv_file') and self._csv_file:
+            try:
+                self._csv_file.close()
+            except Exception:
+                pass
 
     def log(self, msg: str, after_callback=None, level=logging.INFO):
         """Ghi log chung (chỉ ghi txt và hiển thị UI)."""
@@ -76,10 +86,10 @@ class AppLogger:
         level = logging.ERROR if status == "FAILED" or error else logging.INFO
         self.log(txt_msg, after_callback, level=level)
         
-        # Log to CSV
-        try:
-            with open(self.csv_path, 'a', newline='', encoding='utf-8-sig') as f:
-                writer = csv.writer(f)
-                writer.writerow([timestamp, action, filename, source, destination, status, f"{duration:.2f}", error])
-        except Exception as e:
-            self._logger.error(f"Failed to write to CSV log: {e}")
+        # Log to CSV (tái sử dụng handle)
+        if self._csv_writer and self._csv_file:
+            try:
+                self._csv_writer.writerow([timestamp, action, filename, source, destination, status, f"{duration:.2f}", error])
+                self._csv_file.flush() # Vẫn an toàn dữ liệu, nhưng bỏ qua overhead HĐH open/close
+            except Exception as e:
+                self._logger.error(f"Failed to write to CSV log: {e}")

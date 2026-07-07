@@ -307,13 +307,15 @@ class MassPrintApp(BaseApp):
                 return True
             return any(k in name_lower for k in keywords)
 
-        matched = [
+        type_label = {".pdf": "PDF", ".doc": "DOC", ".docx": "DOC", ".xls": "XLS", ".xlsx": "XLS"}
+        
+        # Sử dụng Generator thay vì tạo List trung gian giúp tiết kiệm RAM và giảm độ trễ
+        matched_gen = (
             f for f in self.all_files
             if f["ext"] in allowed_exts and name_matches(f["name_lower"])
-        ]
+        )
 
-        type_label = {".pdf": "PDF", ".doc": "DOC", ".docx": "DOC", ".xls": "XLS", ".xlsx": "XLS"}
-        for f in matched:
+        for f in matched_gen:
             check_mark = "☑" if f["path"] in self.checked_files else "☐"
             self.tree.insert(
                 "", "end",
@@ -369,7 +371,12 @@ class MassPrintApp(BaseApp):
         self._update_stt()
 
     def _update_stt(self):
-        for index, item_id in enumerate(self.tree.get_children(), start=1):
+        children = self.tree.get_children()
+        # Ngăn chặn Tkinter UI Freeze (O(N) update event) nếu số lượng quá lớn
+        if len(children) > 10000:
+            return
+            
+        for index, item_id in enumerate(children, start=1):
             vals = list(self.tree.item(item_id, "values"))
             vals[1] = str(index)
             self.tree.item(item_id, values=vals)
@@ -519,6 +526,7 @@ class MassPrintApp(BaseApp):
 
         success, failed, processed = 0, 0, 0
         cancelled = False
+        last_ui_update = time.time()
 
         for path in files:
             if self.print_cancel_requested.is_set():
@@ -532,9 +540,14 @@ class MassPrintApp(BaseApp):
                 failed += 1
                 
             processed += 1
-            self.after(0, self._update_progress, processed, total)
+            current_time = time.time()
+            if current_time - last_ui_update >= 0.1:
+                self.after(0, self._update_progress, processed, total)
+                last_ui_update = current_time
 
         printer.cleanup()
+        
+        self.after(0, self._update_progress, processed, total)
         
         if not cancelled:
             self.logger.log(f"--- Hoàn tất gửi {success}/{total} file ---", after_callback=self.after)

@@ -64,8 +64,8 @@ class Printer:
         try:
             # Prevent password prompt hanging
             doc = word.Documents.Open(filepath, ReadOnly=True, PasswordDocument="DUMMY_PASSWORD_123")
-            doc.PrintOut()
-            time.sleep(1)
+            # In đồng bộ (Background=False) để hệ thống đợi lệnh nạp vào Spooler thay vì sleep thủ công
+            doc.PrintOut(Background=False)
         finally:
             if doc:
                 try:
@@ -87,8 +87,8 @@ class Printer:
         wb = None
         try:
             wb = excel.Workbooks.Open(filepath, ReadOnly=True, UpdateLinks=0, IgnoreReadOnlyRecommended=True)
+            # Excel PrintOut mặc định là đồng bộ
             wb.PrintOut()
-            time.sleep(1)
         finally:
             if wb:
                 try:

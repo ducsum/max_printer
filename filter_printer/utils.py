@@ -1,5 +1,6 @@
 import os
 import re
+import functools
 
 FILE_TYPE_GROUPS = {
     "PDF": [".pdf"],
@@ -8,9 +9,12 @@ FILE_TYPE_GROUPS = {
 }
 ALL_EXTENSIONS = [ext for exts in FILE_TYPE_GROUPS.values() for ext in exts]
 
-def natural_sort_key(text: str) -> list:
-    """Tạo key sắp xếp để chuỗi có số được sắp xếp theo đúng thứ tự logic."""
-    return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', text)]
+_NATURAL_SPLIT = re.compile(r'(\d+)')
+
+@functools.lru_cache(maxsize=10000)
+def natural_sort_key(text: str) -> tuple:
+    """Tạo key sắp xếp để chuỗi có số được sắp xếp theo đúng thứ tự logic. Caching tiết kiệm CPU."""
+    return tuple(int(c) if c.isdigit() else c.lower() for c in _NATURAL_SPLIT.split(text))
 
 def format_size(size_in_bytes: int) -> str:
     """Định dạng kích thước file sang đơn vị dễ đọc."""
@@ -40,9 +44,11 @@ def is_file_locked(filepath: str) -> bool:
     except IOError:
         return True
 
+_COMPANY_CODE_RE = re.compile(r'([a-zA-Z]+\d+)')
+
 def get_company_code(filename: str) -> str:
     """Trích xuất mã công ty từ tên file. Trả về 'Khác' nếu không tìm thấy."""
-    match = re.search(r'([a-zA-Z]+\d+)', filename)
+    match = _COMPANY_CODE_RE.search(filename)
     if match:
         return match.group(1).upper()
     return "Khác"
