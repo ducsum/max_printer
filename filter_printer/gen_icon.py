@@ -1,6 +1,9 @@
+import os
+
 from PIL import Image, ImageDraw
 
 SIZE = 256
+OUTPUT_PATH = os.path.join(os.path.dirname(__file__), "icon.ico")
 
 img = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
 draw = ImageDraw.Draw(img)

@@ -59,11 +59,13 @@ else:
         pass
 
 class MassPrintApp(BaseApp):
-    CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    CONFIG_FILE = resource_path("config.json")
+    if not os.path.exists(CONFIG_FILE):
+        CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
     def __init__(self):
         super().__init__()
-        self.title("Lọc & In hàng loạt file theo mã công ty (Production Edition)")
+        self.title("Lọc & In hàng loạt file theo mã công ty - Đình Đức B8")
         
         self.cfg = AppConfig(self.CONFIG_FILE)
         geo = self.cfg.get("window_geometry", "880x600")
