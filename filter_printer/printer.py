@@ -2,6 +2,7 @@ import os
 import time
 import subprocess
 from typing import Optional
+from constants import PRINT_RETRY_COUNT, PRINT_RETRY_DELAY, SUMATRA_TIMEOUT
 
 def find_sumatra() -> Optional[str]:
     SUMATRA_CANDIDATES = [
@@ -69,8 +70,8 @@ class Printer:
             if doc:
                 try:
                     doc.Close(False)
-                except Exception:
-                    pass
+                except Exception as e:
+                    self.logger.log(f"[CẢNH BÁO] Lỗi khi đóng file Word: {e}", after_callback=None)
 
     def print_excel(self, filepath: str):
         excel = self._get_excel()
@@ -92,8 +93,8 @@ class Printer:
             if wb:
                 try:
                     wb.Close(False)
-                except Exception:
-                    pass
+                except Exception as e:
+                    self.logger.log(f"[CẢNH BÁO] Lỗi khi đóng file Excel: {e}", after_callback=None)
 
     def print_pdf(self, filepath: str):
         if self.sumatra_path:
@@ -101,7 +102,7 @@ class Printer:
             cmd.extend(["-silent", filepath])
             
             try:
-                subprocess.run(cmd, timeout=60)
+                subprocess.run(cmd, timeout=SUMATRA_TIMEOUT)
             except subprocess.TimeoutExpired:
                 raise Exception("Timeout in SumatraPDF")
         else:
@@ -156,7 +157,7 @@ class Printer:
 
         ext = os.path.splitext(filepath)[1].lower()
 
-        for attempt in range(3):
+        for attempt in range(PRINT_RETRY_COUNT):
             try:
                 if ext == ".pdf":
                     self.print_pdf(filepath)
@@ -170,32 +171,18 @@ class Printer:
                 return True, time.time() - start_time
                 
             except Exception as e:
-                if attempt < 2:
+                if attempt < PRINT_RETRY_COUNT - 1:
                     if ext in (".doc", ".docx"):
                         self._reset_word()
                     elif ext in (".xls", ".xlsx"):
                         self._reset_excel()
-                    time.sleep(2)
+                    time.sleep(PRINT_RETRY_DELAY)
                 else:
                     raise e
                     
         return False, time.time() - start_time
 
     def cleanup(self):
-        try:
-            if self._word_app is not None:
-                self._word_app.Quit()
-        except Exception:
-            pass
-        finally:
-            self._word_app = None
-
-        try:
-            if self._excel_app is not None:
-                self._excel_app.Quit()
-        except Exception:
-            pass
-        finally:
-            self._excel_app = None
-
+        self._reset_word()
+        self._reset_excel()
         self.restore_default_printer()

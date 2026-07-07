@@ -3,6 +3,7 @@ import time
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+import logging
 
 try:
     from tkinterdnd2 import TkinterDnD, DND_FILES
@@ -17,6 +18,8 @@ from copy_manager import CopyManager
 from scanner import FolderScanner
 from utils import FILE_TYPE_GROUPS, natural_sort_key, format_size, format_time
 import dialogs
+
+logging.basicConfig(level=logging.INFO)
 
 def list_printers():
     """Trả về (danh sách tên máy in, tên máy in mặc định)."""
@@ -124,9 +127,10 @@ class MassPrintApp(BaseApp):
         self.btn_filter = ttk.Button(frm_filter, text="Lọc", command=self.apply_filter)
         self.btn_filter.pack(side="left", padx=10)
 
-        columns = ("checked", "name", "type", "size", "modified", "path")
+        columns = ("checked", "stt", "name", "type", "size", "modified", "path")
         self.tree = ttk.Treeview(self, columns=columns, show="headings", selectmode="extended")
         self.tree.heading("checked", text="✔")
+        self.tree.heading("stt", text="STT")
         self.tree.heading("name", text="Tên file", command=lambda: self.sort_by_column("name"))
         self.tree.heading("type", text="Loại", command=lambda: self.sort_by_column("type"))
         self.tree.heading("size", text="Kích thước", command=lambda: self.sort_by_column("size"))
@@ -134,12 +138,15 @@ class MassPrintApp(BaseApp):
         self.tree.heading("path", text="Đường dẫn", command=lambda: self.sort_by_column("path"))
         
         self.tree.column("checked", width=40, anchor="center")
+        self.tree.column("stt", width=50, anchor="center")
         self.tree.column("name", width=250)
         self.tree.column("type", width=60, anchor="center")
         self.tree.column("size", width=80, anchor="e")
         self.tree.column("modified", width=140, anchor="center")
         self.tree.column("path", width=250)
         self.tree.pack(fill="both", expand=True, padx=8, pady=6)
+        
+        self.tree.tag_configure('highlight', background='#ffff99')
         
         self.tree.bind("<Button-1>", self.on_row_click)
         self.tree.bind("<Double-1>", self.on_row_double_click)
@@ -290,10 +297,12 @@ class MassPrintApp(BaseApp):
         type_label = {".pdf": "PDF", ".doc": "DOC", ".docx": "DOC", ".xls": "XLS", ".xlsx": "XLS"}
         for f in matched:
             check_mark = "☑" if f["path"] in self.checked_files else "☐"
+            tags = ('highlight',) if keywords and any(k in f["name"].lower() for k in keywords) else ()
             self.tree.insert(
                 "", "end",
-                values=(check_mark, f["name"], type_label.get(f["ext"], f["ext"]), 
-                        format_size(f["size"]), f["mtime"], f["path"])
+                values=(check_mark, "", f["name"], type_label.get(f["ext"], f["ext"]), 
+                        format_size(f["size"]), f["mtime"], f["path"]),
+                tags=tags
             )
         
         self.sort_by_column(self.sort_column, self.sort_reverse)
@@ -330,6 +339,14 @@ class MassPrintApp(BaseApp):
 
         for index, (_, k) in enumerate(items):
             self.tree.move(k, "", index)
+            
+        self._update_stt()
+
+    def _update_stt(self):
+        for index, item_id in enumerate(self.tree.get_children(), start=1):
+            vals = list(self.tree.item(item_id, "values"))
+            vals[1] = str(index)
+            self.tree.item(item_id, values=vals)
 
     def on_row_click(self, event):
         if self.btn_print.cget("state") == "disabled":
@@ -352,7 +369,7 @@ class MassPrintApp(BaseApp):
         row = self.tree.identify_row(event.y)
         if not row:
             return
-        filepath = self.tree.item(row, "values")[5]
+        filepath = self.tree.item(row, "values")[6]
         try:
             os.startfile(filepath)
         except Exception as e:
@@ -367,19 +384,19 @@ class MassPrintApp(BaseApp):
     def open_file_location(self):
         selected = self.tree.selection()
         if selected:
-            filepath = self.tree.item(selected[0], "values")[5]
+            filepath = self.tree.item(selected[0], "values")[6]
             os.startfile(os.path.dirname(filepath))
             
     def copy_file_path(self):
         selected = self.tree.selection()
         if selected:
-            filepath = self.tree.item(selected[0], "values")[5]
+            filepath = self.tree.item(selected[0], "values")[6]
             self.clipboard_clear()
             self.clipboard_append(filepath)
 
     def toggle_check(self, item_id):
         vals = list(self.tree.item(item_id, "values"))
-        filepath = vals[5]
+        filepath = vals[6]
         if filepath in self.checked_files:
             self.checked_files.remove(filepath)
             vals[0] = "☐"
@@ -394,7 +411,7 @@ class MassPrintApp(BaseApp):
             vals = list(self.tree.item(item_id, "values"))
             vals[0] = "☑"
             self.tree.item(item_id, values=vals)
-            self.checked_files.add(vals[5])
+            self.checked_files.add(vals[6])
         self.update_count()
 
     def deselect_all(self):

@@ -2,6 +2,7 @@ import os
 import csv
 import time
 import datetime
+import logging
 from typing import Optional
 
 class AppLogger:
@@ -14,16 +15,33 @@ class AppLogger:
         self.txt_path = os.path.join(self.log_dir, f"log_{timestamp}.txt")
         self.csv_path = os.path.join(self.log_dir, f"log_{timestamp}.csv")
         
+        # Initialize standard logger
+        self._logger = logging.getLogger("MassPrintApp")
+        self._logger.setLevel(logging.DEBUG)
+        
+        # File handler
+        file_handler = logging.FileHandler(self.txt_path, encoding="utf-8")
+        file_formatter = logging.Formatter('[%(asctime)s] %(levelname)s\n%(message)s\n', datefmt='%H:%M:%S')
+        file_handler.setFormatter(file_formatter)
+        self._logger.addHandler(file_handler)
+        
         # Initialize CSV header
         try:
             with open(self.csv_path, 'w', newline='', encoding='utf-8-sig') as f:
                 writer = csv.writer(f)
                 writer.writerow(["Timestamp", "Action", "Filename", "Source", "Destination", "Status", "Duration", "Error"])
-        except Exception:
-            pass
+        except Exception as e:
+            self._logger.error(f"Failed to create CSV log file: {e}")
 
-    def log(self, msg: str, after_callback=None):
+    def log(self, msg: str, after_callback=None, level=logging.INFO):
         """Ghi log chung (chỉ ghi txt và hiển thị UI)."""
+        if level >= logging.ERROR:
+            self._logger.error(msg, exc_info=True)
+        elif level >= logging.WARNING:
+            self._logger.warning(msg)
+        else:
+            self._logger.info(msg)
+            
         timestamped = f"[{time.strftime('%H:%M:%S')}]\n{msg}"
         
         if self.log_box and after_callback:
@@ -33,15 +51,9 @@ class AppLogger:
                     self.log_box.insert("end", timestamped + "\n\n")
                     self.log_box.see("end")
                     self.log_box.configure(state="disabled")
-                except Exception:
-                    pass
+                except Exception as e:
+                    self._logger.error(f"Failed to update UI log: {e}")
             after_callback(0, _update_ui)
-            
-        try:
-            with open(self.txt_path, "a", encoding="utf-8") as f:
-                f.write(timestamped + "\n\n")
-        except Exception:
-            pass
 
     def log_action(self, action: str, filename: str, source: str, destination: str, 
                    status: str, duration: float = 0.0, error: str = "", after_callback=None):
@@ -60,12 +72,14 @@ class AppLogger:
             msg_parts.append(f"Lỗi: {error}")
             
         txt_msg = "\n".join(msg_parts)
-        self.log(txt_msg, after_callback)
+        # Use log for TXT and UI
+        level = logging.ERROR if status == "FAILED" or error else logging.INFO
+        self.log(txt_msg, after_callback, level=level)
         
         # Log to CSV
         try:
             with open(self.csv_path, 'a', newline='', encoding='utf-8-sig') as f:
                 writer = csv.writer(f)
                 writer.writerow([timestamp, action, filename, source, destination, status, f"{duration:.2f}", error])
-        except Exception:
-            pass
+        except Exception as e:
+            self._logger.error(f"Failed to write to CSV log: {e}")

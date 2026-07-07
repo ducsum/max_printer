@@ -1,6 +1,10 @@
 import os
 import time
+import logging
 from utils import ALL_EXTENSIONS
+from constants import IGNORED_DIRS
+
+logger = logging.getLogger(__name__)
 
 class FolderScanner:
     def __init__(self, folder_path: str, progress_callback, finished_callback):
@@ -13,7 +17,13 @@ class FolderScanner:
         file_count = 0
         total_size = 0
         
-        for root, _, files in os.walk(self.folder_path):
+        def walk_error(err):
+            logger.warning(f"Lỗi truy cập thư mục khi quét: {err}")
+
+        for root, dirs, files in os.walk(self.folder_path, onerror=walk_error):
+            # Lọc bỏ các thư mục không cần thiết để tối ưu
+            dirs[:] = [d for d in dirs if d not in IGNORED_DIRS]
+            
             for f in files:
                 if f.startswith("~$"):
                     continue
@@ -25,9 +35,12 @@ class FolderScanner:
                             "%d/%m/%Y %H:%M", time.localtime(os.path.getmtime(full))
                         )
                         size = os.path.getsize(full)
-                    except OSError:
-                        mtime = ""
-                        size = 0
+                    except PermissionError as e:
+                        logger.warning(f"Không có quyền truy cập file: {full} - {e}")
+                        continue
+                    except OSError as e:
+                        logger.warning(f"Lỗi đọc file info: {full} - {e}")
+                        continue
                         
                     scanned_files.append({
                         "name": f, 

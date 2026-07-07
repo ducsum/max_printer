@@ -1,7 +1,9 @@
 import os
 import shutil
 import time
-from utils import get_company_code, get_long_path
+import hashlib
+from utils import get_company_code, get_long_path, is_file_locked
+from constants import COPY_RETRY_COUNT, COPY_RETRY_DELAY, HASH_LIMIT_BYTES
 
 class CopyManager:
     def __init__(self, app):
@@ -16,6 +18,13 @@ class CopyManager:
             if not os.path.exists(new_path):
                 return new_path
             counter += 1
+
+    def _calculate_sha256(self, filepath: str) -> str:
+        sha256_hash = hashlib.sha256()
+        with open(filepath, "rb") as f:
+            for byte_block in iter(lambda: f.read(4096), b""):
+                sha256_hash.update(byte_block)
+        return sha256_hash.hexdigest()
 
     def run(self, files: list, dest_dir: str, is_move: bool):
         total = len(files)
@@ -48,6 +57,13 @@ class CopyManager:
             
             long_path = get_long_path(path)
 
+            if long_path == dest_path:
+                skipped += 1
+                self.app.logger.log_action("SKIP", filename, long_path, dest_path, "SKIPPED_SAME_PATH", after_callback=self.app.after)
+                processed += 1
+                self.app.after(0, self.app._update_progress, processed, total)
+                continue
+
             try:
                 os.makedirs(target_dir, exist_ok=True)
                 
@@ -70,23 +86,52 @@ class CopyManager:
                     elif action == "overwrite":
                         pass
 
+                # Retry logic for lock/permission errors
+                success = False
+                last_error = None
+                for attempt in range(COPY_RETRY_COUNT):
+                    try:
+                        if is_file_locked(long_path):
+                            raise PermissionError(f"File nguồn đang bị khóa: {long_path}")
+                        if os.path.exists(dest_path) and is_file_locked(dest_path):
+                            raise PermissionError(f"File đích đang bị khóa: {dest_path}")
+
+                        if is_move:
+                            if os.path.exists(dest_path):
+                                os.replace(long_path, dest_path)
+                            else:
+                                shutil.move(long_path, dest_path)
+                        else:
+                            if os.path.exists(dest_path):
+                                os.remove(dest_path)
+                            shutil.copy2(long_path, dest_path)
+                            
+                            # Verify
+                            src_size = os.path.getsize(long_path)
+                            dst_size = os.path.getsize(dest_path)
+                            if src_size != dst_size:
+                                raise Exception("Kích thước file không khớp sau khi copy")
+                                
+                            if src_size < HASH_LIMIT_BYTES:
+                                if self._calculate_sha256(long_path) != self._calculate_sha256(dest_path):
+                                    raise Exception("Mã SHA256 không khớp sau khi copy")
+                        success = True
+                        break
+                    except PermissionError as e:
+                        last_error = e
+                        time.sleep(COPY_RETRY_DELAY)
+                    except Exception as e:
+                        last_error = e
+                        break # Other errors, don't retry
+
+                if not success:
+                    raise last_error
+
                 if is_move:
-                    if os.path.exists(dest_path):
-                        os.replace(long_path, dest_path)
-                    else:
-                        shutil.move(long_path, dest_path)
                     success_move += 1
                     duration = time.time() - start_time
                     self.app.logger.log_action("MOVE", filename, long_path, dest_path, "SUCCESS", duration, after_callback=self.app.after)
                 else:
-                    if os.path.exists(dest_path):
-                        os.remove(dest_path)
-                    shutil.copy2(long_path, dest_path)
-                    
-                    # Verify size
-                    if os.path.getsize(long_path) != os.path.getsize(dest_path):
-                        raise Exception("Kích thước file không khớp sau khi copy")
-                        
                     success_copy += 1
                     duration = time.time() - start_time
                     self.app.logger.log_action("COPY", filename, long_path, dest_path, "SUCCESS", duration, after_callback=self.app.after)
