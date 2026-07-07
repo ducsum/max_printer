@@ -1,9 +1,25 @@
 import os
+import sys
 import time
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import logging
+
+try:
+    from PIL import Image, ImageTk
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(os.path.dirname(__file__))
+    return os.path.join(base_path, relative_path)
+
 
 try:
     from tkinterdnd2 import TkinterDnD, DND_FILES
@@ -52,6 +68,15 @@ class MassPrintApp(BaseApp):
         self.cfg = AppConfig(self.CONFIG_FILE)
         geo = self.cfg.get("window_geometry", "880x600")
         self.geometry(geo)
+
+        # Thiết lập icon cho ứng dụng
+        self.icon_path = resource_path("icon.ico")
+        if os.path.exists(self.icon_path):
+            try:
+                self.iconbitmap(self.icon_path)
+            except Exception:
+                pass
+
 
         self.folder_path = tk.StringVar()
         self.keyword = tk.StringVar(value=self.cfg.get("last_keyword", ""))
@@ -108,6 +133,10 @@ class MassPrintApp(BaseApp):
         self.btn_select_folder = ttk.Button(frm_top, text="Chọn thư mục...", command=self.choose_folder)
         self.btn_select_folder.pack(side="left")
         ttk.Label(frm_top, textvariable=self.folder_path, foreground="gray").pack(side="left", padx=8)
+
+        # Donate Button
+        self.btn_donate = ttk.Button(frm_top, text="🎁 Donate", command=self.show_donate_popup)
+        self.btn_donate.pack(side="right")
 
         frm_filter = ttk.Frame(self)
         frm_filter.pack(fill="x", **pad)
@@ -668,6 +697,22 @@ class MassPrintApp(BaseApp):
                 os.startfile(dest_dir)
             except Exception:
                 pass
+
+    def show_donate_popup(self):
+        if not HAS_PIL: return
+        popup = tk.Toplevel(self)
+        popup.title("Donate ❤️")
+        popup.geometry("290x370")
+        popup.transient(self)
+        popup.grab_set()
+        img_path = resource_path("QR.jpg")
+        if os.path.exists(img_path):
+            img = Image.open(img_path).resize((270, 348), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            lbl = tk.Label(popup, image=photo, bg="#f0f0f0")
+            lbl.image = photo
+            lbl.pack(pady=10)
+
 
 if __name__ == "__main__":
     app = MassPrintApp()
